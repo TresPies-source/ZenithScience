@@ -76,110 +76,43 @@ DocumentResponse (format: 'grant-pdf' | 'grant-docx' | 'grant-both', artifacts: 
 
 ### 3.2 MCP Tool Definitions
 
-#### Tool: `convert_to_grant`
-**Description:** Convert Markdown proposal + funder config to PDF and/or Word grant proposal.
+#### Tool: `generate_proposal`
+**Description:** Convert structured grant sections to funder-compliant LaTeX format (NIH, NSF, ERC).
+
+> **Implementation note (2026-02-18):** The original spec used a `source + frontmatter` input model.
+> The shipped implementation uses a **sections-array model** — more ergonomic for MCP callers because
+> it avoids requiring callers to assemble a YAML frontmatter blob. This is now the canonical contract.
 
 **Input Schema:**
 ```json
 {
   "type": "object",
   "properties": {
-    "source": {
-      "type": "string",
-      "description": "Markdown proposal content (without YAML frontmatter). Structure: ## Specific Aims, ## Research Plan, ## Budget Justification, etc."
+    "sections": {
+      "type": "array",
+      "description": "Ordered proposal sections. Each section has a functional role and markdown content.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "role": { "type": "string", "description": "Section role (e.g., specific-aims, research-strategy, budget-justification)" },
+          "content": { "type": "string", "description": "Section content in markdown" },
+          "title": { "type": "string", "description": "Optional custom section title (overrides role-derived default)" }
+        },
+        "required": ["role", "content"]
+      }
     },
-    "frontmatter": {
+    "funder": { "type": "string", "enum": ["nih", "nsf", "erc"], "description": "Funding agency" },
+    "programType": { "type": "string", "description": "Program type (e.g., R01, CAREER, standard)" },
+    "bibliography": { "type": "string", "description": "BibTeX bibliography content" },
+    "options": {
       "type": "object",
       "properties": {
-        "title": { "type": "string", "description": "Proposal title (NIH: ≤81 chars)" },
-        "funder": {
-          "type": "string",
-          "enum": ["nih", "nsf", "erc"],
-          "description": "Target funder; determines formatting rules, budget structure."
-        },
-        "program_type": {
-          "type": "string",
-          "enum": ["nih-r01", "nih-r21", "nih-f32", "nsf-standard", "nsf-career", "erc-starting", "erc-consolidator"],
-          "description": "Specific program; determines page limits, budget rules, etc."
-        },
-        "principal_investigator": {
-          "type": "object",
-          "properties": {
-            "name": { "type": "string" },
-            "institution": { "type": "string" },
-            "department": { "type": "string" },
-            "email": { "type": "string" }
-          },
-          "required": ["name", "institution"]
-        },
-        "project_period": {
-          "type": "object",
-          "properties": {
-            "start_date": { "type": "string", "format": "date" },
-            "end_date": { "type": "string", "format": "date" },
-            "duration_years": { "type": "number" }
-          }
-        },
-        "specific_aims": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "aim_number": { "type": "integer" },
-              "title": { "type": "string" },
-              "objective": { "type": "string" },
-              "outcomes": { "type": "array", "items": { "type": "string" } },
-              "impact": { "type": "string" }
-            },
-            "required": ["aim_number", "title", "objective"]
-          },
-          "description": "Structured specific aims; auto-formatted into Specific Aims page."
-        },
-        "budget": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "category": { "type": "string", "enum": ["personnel", "equipment", "travel", "other", "facilities"] },
-              "description": { "type": "string" },
-              "amount": { "type": "number" },
-              "justification": { "type": "string" },
-              "linked_aim": { "type": "integer", "description": "Aim # this expense supports" }
-            },
-            "required": ["category", "description", "amount"]
-          },
-          "description": "Budget line items; auto-formatted per funder rules."
-        },
-        "institution": {
-          "type": "object",
-          "properties": {
-            "name": { "type": "string" },
-            "indirect_cost_rate": { "type": "number", "description": "Institutional overhead (e.g., 0.25 = 25%)" },
-            "cost_sharing": { "type": "boolean" },
-            "duns_number": { "type": "string", "description": "DUNS# for NIH" },
-            "ein": { "type": "string", "description": "Employer ID# for NSF/ERC" }
-          }
-        },
-        "bibliography": { "type": "string", "description": "CSL-JSON or BibTeX bibliography file path." },
-        "options": {
-          "type": "object",
-          "properties": {
-            "include_timeline": { "type": "boolean" },
-            "include_figures": { "type": "boolean" },
-            "validation_strict": { "type": "boolean", "description": "Fail on warnings (not just errors)." },
-            "budget_auto_justify": { "type": "boolean", "description": "Auto-generate budget justifications from activities." }
-          }
-        }
-      },
-      "required": ["title", "funder", "program_type", "principal_investigator"]
-    },
-    "format": {
-      "type": "string",
-      "enum": ["pdf", "docx", "both"],
-      "description": "Output format(s)."
+        "outputFormat": { "type": "string", "enum": ["grant-latex", "docx"] },
+        "engine": { "type": "string" }
+      }
     }
   },
-  "required": ["source", "frontmatter", "format"]
+  "required": ["sections", "funder", "programType"]
 }
 ```
 
@@ -188,51 +121,49 @@ DocumentResponse (format: 'grant-pdf' | 'grant-docx' | 'grant-both', artifacts: 
 {
   "type": "object",
   "properties": {
-    "id": { "type": "string" },
-    "format": { "type": "string", "enum": ["grant-pdf", "grant-docx", "grant-both"] },
-    "content": { "type": "string", "description": "Base64-encoded PDF, .docx, or JSON with both." },
-    "artifacts": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "type": { "type": "string", "enum": ["specific_aims", "budget_table", "timeline", "validation_report", "budget_justification"] },
-          "filename": { "type": "string" },
-          "content": { "type": "string" }
-        }
-      }
-    },
-    "metadata": {
+    "latex_source": { "type": "string", "description": "Generated LaTeX source" },
+    "format": { "type": "string" },
+    "compliance": {
       "type": "object",
       "properties": {
-        "funder": { "type": "string" },
-        "program_type": { "type": "string" },
-        "page_count": { "type": "integer" },
-        "budget_total": { "type": "number" },
-        "budget_overhead": { "type": "number" },
-        "compliance_status": { "type": "string", "enum": ["compliant", "warning", "error"] },
-        "validation_messages": { "type": "array", "items": { "type": "string" } }
+        "compliant": { "type": "boolean" },
+        "violations": { "type": "array", "items": { "type": "object", "properties": { "severity": { "type": "string" }, "section": { "type": "string" }, "details": { "type": "string" } } } },
+        "warnings": { "type": "array", "items": { "type": "object" } },
+        "score": { "type": "number" }
       }
     },
-    "elapsed": { "type": "number" }
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "page_counts": { "type": "object", "description": "Map of section roles to estimated page counts" },
+    "elapsed_ms": { "type": "number" }
   },
-  "required": ["id", "format", "content", "metadata", "elapsed"]
+  "required": ["latex_source", "format", "compliance", "warnings", "page_counts", "elapsed_ms"]
 }
 ```
 
-#### Tool: `validate_grant_proposal`
-**Description:** Validate proposal against funder rules (page limits, fonts, margins, budget structure).
+#### Tool: `validate_compliance`
+**Description:** Validate grant proposal sections against funder-specific compliance rules.
 
 **Input Schema:**
 ```json
 {
   "type": "object",
   "properties": {
-    "source": { "type": "string" },
-    "frontmatter": { "type": "object" },
-    "strict_mode": { "type": "boolean", "description": "Fail on warnings, not just errors." }
+    "sections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "role": { "type": "string" },
+          "content": { "type": "string" },
+          "title": { "type": "string" }
+        },
+        "required": ["role", "content"]
+      }
+    },
+    "funder": { "type": "string", "enum": ["nih", "nsf", "erc"] },
+    "programType": { "type": "string" }
   },
-  "required": ["source", "frontmatter"]
+  "required": ["sections", "funder", "programType"]
 }
 ```
 
@@ -242,44 +173,44 @@ DocumentResponse (format: 'grant-pdf' | 'grant-docx' | 'grant-both', artifacts: 
   "type": "object",
   "properties": {
     "compliant": { "type": "boolean" },
-    "funder": { "type": "string" },
-    "program_type": { "type": "string" },
-    "errors": {
+    "violations": {
       "type": "array",
       "items": {
         "type": "object",
         "properties": {
-          "rule": { "type": "string", "enum": ["font_size", "margins", "page_limit", "specific_aims_format", "budget_coherence", "missing_field"] },
-          "message": { "type": "string" },
-          "severity": { "type": "string", "enum": ["error", "warning"] }
+          "severity": { "type": "string" },
+          "section": { "type": "string" },
+          "details": { "type": "string" }
         }
       }
     },
-    "report": {
-      "type": "object",
-      "properties": {
-        "page_limit": { "type": "object", "properties": { "limit": { "type": "integer" }, "estimated": { "type": "integer" }, "status": { "type": "string" } } },
-        "font_size": { "type": "object", "properties": { "minimum": { "type": "integer" }, "detected": { "type": "integer" }, "status": { "type": "string" } } },
-        "margins": { "type": "object", "properties": { "minimum": { "type": "number" }, "detected": { "type": "number" }, "status": { "type": "string" } } },
-        "specific_aims": { "type": "object", "properties": { "count": { "type": "integer" }, "all_have_timelines": { "type": "boolean" }, "all_have_metrics": { "type": "boolean" } } },
-        "budget": { "type": "object", "properties": { "total": { "type": "number" }, "overhead": { "type": "number" }, "coherent_with_aims": { "type": "boolean" } } }
-      }
-    }
+    "warnings": { "type": "array", "items": { "type": "object" } },
+    "score": { "type": "number" }
   },
-  "required": ["compliant", "funder", "program_type", "errors", "report"]
+  "required": ["compliant", "violations", "warnings", "score"]
 }
 ```
 
-#### Tool: `list_grant_funders`
-**Description:** List supported funders and program types with rule summaries.
+#### Tool: `check_format`
+**Description:** Return submission format requirements for a given grant submission platform.
+
+> **Implementation note (2026-02-18):** Original spec named this `list_grant_funders` with an optional
+> `funder` filter returning a funder catalog. The shipped tool is named `check_format` and accepts a
+> required `platform` enum, returning structured file/page-limit requirements per platform. This is now
+> the canonical contract; the funder catalog use-case is a Phase 4 app-layer concern.
 
 **Input Schema:**
 ```json
 {
   "type": "object",
   "properties": {
-    "funder": { "type": "string", "enum": ["nih", "nsf", "erc"], "description": "Optional filter." }
-  }
+    "platform": {
+      "type": "string",
+      "enum": ["grants-gov", "nih-era-commons", "nsf-research-gov", "erc-sep", "manual"],
+      "description": "Submission platform"
+    }
+  },
+  "required": ["platform"]
 }
 ```
 
@@ -288,30 +219,13 @@ DocumentResponse (format: 'grant-pdf' | 'grant-docx' | 'grant-both', artifacts: 
 {
   "type": "object",
   "properties": {
-    "funders": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "name": { "type": "string" },
-          "programs": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "name": { "type": "string" },
-                "page_limit": { "type": "integer" },
-                "min_font_size": { "type": "integer" },
-                "min_margin": { "type": "number" },
-                "budget_structure": { "type": "object" },
-                "description": { "type": "string" }
-              }
-            }
-          }
-        }
-      }
-    }
-  }
+    "platform": { "type": "string" },
+    "requiredFiles": { "type": "array", "items": { "type": "string" } },
+    "pageLimits": { "type": "object", "description": "Map of file role to page limit" },
+    "acceptedFormats": { "type": "array", "items": { "type": "string" } },
+    "notes": { "type": "string" }
+  },
+  "required": ["platform", "requiredFiles", "pageLimits", "acceptedFormats", "notes"]
 }
 ```
 

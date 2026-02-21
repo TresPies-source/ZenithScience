@@ -75,165 +75,99 @@ DocumentResponse (format: 'slides-beamer' | 'slides-html', content: Buffer, arti
 
 ### 3.2 MCP Tool Definitions
 
+> **Implementation note (2026-02-18):** The tool contracts below reflect the **implemented** design. Key divergences from the original spec:
+>
+> 1. **`validate_slides_source` → `validate_deck`**: The tool was renamed to `validate_deck` for conciseness; the original `list_slide_themes` tool name is unchanged but the `format` enum value changed from `'reveal'` to `'revealjs'` for consistency with the renderer name.
+>
+> 2. **`format` enum**: `'reveal'` renamed to `'revealjs'`; `'both'` format added to `convert_to_slides` to render both Beamer and Reveal.js simultaneously.
+>
+> 3. **`theme` moved into `options`**: The original spec had `theme` as a top-level sibling of `source`/`format`. The implementation puts it inside the `options` object.
+>
+> 4. **Output fields**: `elapsed` renamed to `elapsed_ms`; `format` returns `'beamer'|'revealjs'|'both'` (not `'slides-beamer'|'slides-html'`); `beamer_output`/`revealjs_output` are emitted when `format='both'`.
+>
+> The implementations in `servers/slides-mcp/src/tools/` are the canonical contracts.
+
 #### Tool: `convert_to_slides`
-**Description:** Convert Markdown presentation source to Beamer PDF and/or Reveal.js HTML.
+**Description:** Convert Markdown presentation source to Beamer LaTeX or Reveal.js HTML (or both simultaneously).
 
 **Input Schema:**
-```json
+```typescript
+// servers/slides-mcp/src/index.ts (actual Zod registration)
+server.tool('convert_to_slides', 'Convert markdown to Beamer LaTeX or Reveal.js presentation slides', {
+  source: z.string().describe('Markdown source content with slides separated by ---'),
+  title: z.string().optional().describe('Presentation title (overrides detected title)'),
+  author: z.string().optional().describe('Presentation author'),
+  format: z.enum(['beamer', 'revealjs', 'both']).describe('Output format: beamer for LaTeX/PDF, revealjs for HTML, or both'),
+  options: z.object({
+    theme: z.string().optional().describe('Presentation theme'),
+    colorTheme: z.string().optional().describe('Beamer color theme'),
+    aspectRatio: z.enum(['169', '43', '1610']).optional().describe('Slide aspect ratio (Beamer)'),
+    showNotes: z.boolean().optional().describe('Show speaker notes (Beamer)'),
+    fontTheme: z.string().optional().describe('Beamer font theme'),
+    transition: z.string().optional().describe('Slide transition (Reveal.js)'),
+    controls: z.boolean().optional().describe('Show controls (Reveal.js)'),
+    progress: z.boolean().optional().describe('Show progress bar (Reveal.js)'),
+    katexEnabled: z.boolean().optional().describe('Enable KaTeX math rendering (Reveal.js)'),
+  }).optional().describe('Renderer-specific options'),
+});
+```
+
+**Output Schema (ConvertToSlidesResult):**
+```typescript
 {
-  "type": "object",
-  "properties": {
-    "source": {
-      "type": "string",
-      "description": "Markdown content with YAML frontmatter. Frontmatter keys: title, author, institute, date, theme, bibliography, options (e.g., {\"speaker_notes\": true, \"numbered_equations\": true})."
-    },
-    "format": {
-      "type": "string",
-      "enum": ["beamer", "reveal", "both"],
-      "description": "Output format(s). 'both' returns PDF and HTML artifacts."
-    },
-    "theme": {
-      "type": "string",
-      "enum": ["metropolis", "berlin", "warsaw", "simple", "dark", "minimal", "sky", "league"],
-      "description": "Theme name. Beamer themes: metropolis, berlin, warsaw, simple. Reveal themes: dark, minimal, sky, league. If provided, overrides frontmatter theme."
-    },
-    "options": {
-      "type": "object",
-      "properties": {
-        "speaker_notes": {
-          "type": "boolean",
-          "description": "Include speaker notes in PDF (notes pages) and HTML (speaker view)."
-        },
-        "numbered_equations": {
-          "type": "boolean",
-          "description": "Number all display equations and enable cross-referencing (e.g., \\ref{eq:label})."
-        },
-        "animations": {
-          "type": "boolean",
-          "description": "Enable reveal.js fragment animations. Ignored for Beamer."
-        },
-        "print_pdf": {
-          "type": "boolean",
-          "description": "Generate print-optimized PDF (single-layer, no transitions). Only Beamer."
-        },
-        "mathjax_config": {
-          "type": "object",
-          "description": "Custom MathJax config for Reveal.js (e.g., {\"tex\": {\"inlineMath\": [[\"$\", \"$\"]]}})."
-        }
-      }
-    }
-  },
-  "required": ["source", "format"]
+  output: string;              // Primary output (Beamer LaTeX or Reveal.js HTML; for 'both', this is the Beamer output)
+  format: 'beamer' | 'revealjs' | 'both';
+  slide_count: number;
+  has_notes: boolean;
+  warnings: string[];
+  beamer_output?: string;      // Present when format='both'
+  revealjs_output?: string;    // Present when format='both'
+  elapsed_ms: number;
 }
 ```
 
-**Output Schema:**
-```json
-{
-  "type": "object",
-  "properties": {
-    "id": { "type": "string" },
-    "format": { "type": "string", "enum": ["slides-beamer", "slides-html", "slides-both"] },
-    "content": { "type": "string", "description": "Base64-encoded PDF or HTML, or JSON object with both if format='both'." },
-    "artifacts": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "type": { "type": "string", "enum": ["speaker_notes", "bibliography", "theme_preview", "outline"] },
-          "filename": { "type": "string" },
-          "content": { "type": "string" }
-        }
-      }
-    },
-    "metadata": {
-      "type": "object",
-      "properties": {
-        "slide_count": { "type": "integer" },
-        "title": { "type": "string" },
-        "theme": { "type": "string" },
-        "has_speaker_notes": { "type": "boolean" },
-        "bibliography_count": { "type": "integer" },
-        "math_expressions": { "type": "integer" }
-      }
-    },
-    "elapsed": { "type": "number", "description": "Conversion time in milliseconds." }
-  },
-  "required": ["id", "format", "content", "metadata", "elapsed"]
-}
-```
-
-#### Tool: `validate_slides_source`
-**Description:** Validate Markdown presentation syntax before conversion (math, citations, structure).
+#### Tool: `validate_deck`
+**Description:** Validate a markdown slide deck for correct structure and content.
 
 **Input Schema:**
-```json
-{
-  "type": "object",
-  "properties": {
-    "source": { "type": "string", "description": "Markdown source to validate." },
-    "strict_mode": { "type": "boolean", "description": "If true, fail on warnings (unused citations, orphaned speaker notes, etc.)." }
-  },
-  "required": ["source"]
-}
+```typescript
+server.tool('validate_deck', 'Validate a markdown slide deck for correct structure and content', {
+  source: z.string().describe('Markdown source content with slides separated by ---'),
+});
 ```
 
-**Output Schema:**
-```json
+**Output Schema (ValidateDeckResult):**
+```typescript
 {
-  "type": "object",
-  "properties": {
-    "valid": { "type": "boolean" },
-    "errors": { "type": "array", "items": { "type": "object", "properties": { "line": { "type": "integer" }, "message": { "type": "string" } } } },
-    "warnings": { "type": "array", "items": { "type": "string" } },
-    "report": {
-      "type": "object",
-      "properties": {
-        "slide_count": { "type": "integer" },
-        "math_expressions": { "type": "integer" },
-        "citations": { "type": "integer" },
-        "speaker_notes_lines": { "type": "integer" },
-        "frontmatter_keys": { "type": "array", "items": { "type": "string" } }
-      }
-    }
-  }
+  valid: boolean;
+  slide_count: number;
+  errors: Array<{ code: string; message: string }>;
+  warnings: Array<{ code: string; message: string }>;
+  elapsed_ms: number;
 }
 ```
 
 #### Tool: `list_slide_themes`
-**Description:** List available themes with preview images and customization options.
+**Description:** List available slide themes for Beamer and Reveal.js formats.
 
 **Input Schema:**
-```json
-{
-  "type": "object",
-  "properties": {
-    "format": { "type": "string", "enum": ["beamer", "reveal", "all"], "description": "Filter by format." }
-  }
-}
+```typescript
+server.tool('list_slide_themes', 'List available slide themes for Beamer and Reveal.js formats', {
+  format: z.enum(['beamer', 'revealjs', 'all']).optional().describe('Filter themes by format (default: all)'),
+});
 ```
 
 **Output Schema:**
-```json
+```typescript
 {
-  "type": "object",
-  "properties": {
-    "themes": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "name": { "type": "string" },
-          "format": { "type": "string" },
-          "description": { "type": "string" },
-          "colors": { "type": "object" },
-          "customizable_options": { "type": "array", "items": { "type": "string" } }
-        }
-      }
-    }
-  }
+  themes: Array<{
+    name: string;
+    format: 'beamer' | 'revealjs';
+    description: string;
+  }>;
 }
 ```
+
 
 ### 3.3 Core Integration Points
 

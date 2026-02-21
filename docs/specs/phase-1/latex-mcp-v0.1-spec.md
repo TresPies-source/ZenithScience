@@ -109,267 +109,81 @@ User input (markdown + .bib)
 
 ### 3.2 MCP Tool Definitions
 
-```typescript
-// servers/latex-mcp/src/index.ts
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+> **Implementation note (2026-02-18):** The tool contracts below reflect the **implemented** design, which diverges from the original spec in two places:
+>
+> 1. `validate_latex_math` (original: `expressions: string[]` input) was redesigned as `validate_document` — a document-level validator that accepts full markdown source and an optional BibTeX bibliography. This surfaces richer validation (math AST walk + citation resolution) in a single call rather than validating bare expression strings.
+>
+> 2. `validate_bibliography` (original: `bibtex_content: string` input) was redesigned as `check_citations` — it requires both the markdown source and the bibliography, so it can cross-reference which citation keys are actually used in the document against the bibliography entries.
+>
+> The original `validate_latex_math` / `validate_bibliography` names and input models are superseded. The implementations in `servers/latex-mcp/src/tools/` are the canonical contracts.
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [
-    {
-      name: 'convert_to_pdf',
-      description: 'Convert markdown document to publication-ready PDF. Supports YAML frontmatter, BibTeX citations, LaTeX environments, and mathematical expressions.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          source: {
-            type: 'string',
-            description: 'Markdown content to convert. Can include fenced LaTeX environments (e.g., ```{theorem}..```)'
-          },
-          title: {
-            type: 'string',
-            description: 'Document title (required for PDF metadata)'
-          },
-          author: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'Author names (for PDF metadata and document header)'
-          },
-          bibliography: {
-            type: 'string',
-            description: 'BibTeX content (.bib file contents) containing citations'
-          },
-          bibliography_style: {
-            type: 'string',
-            enum: ['ieee', 'acm', 'chicago', 'apa', 'nature', 'arxiv'],
-            default: 'ieee',
-            description: 'Citation style for bibliography rendering'
-          },
-          options: {
-            type: 'object',
-            properties: {
-              engine: {
-                type: 'string',
-                enum: ['pdflatex', 'xelatex', 'lualatex'],
-                default: 'pdflatex',
-                description: 'LaTeX compiler to use'
-              },
-              toc: {
-                type: 'boolean',
-                default: true,
-                description: 'Include table of contents'
-              },
-              line_numbers: {
-                type: 'boolean',
-                default: false,
-                description: 'Enable line numbering (useful for drafts)'
-              },
-              page_numbers: {
-                type: 'boolean',
-                default: true,
-                description: 'Include page numbers in footer'
-              },
-              geometry: {
-                type: 'object',
-                properties: {
-                  margin: {
-                    type: 'string',
-                    default: '1in',
-                    description: 'Page margins (e.g., "1in", "2cm")'
-                  },
-                  papersize: {
-                    type: 'string',
-                    enum: ['a4', 'letter'],
-                    default: 'letter',
-                    description: 'Paper size'
-                  }
-                },
-                description: 'Page geometry settings'
-              },
-              font: {
-                type: 'object',
-                properties: {
-                  main: {
-                    type: 'string',
-                    default: 'default',
-                    description: 'Main font (e.g., "TeX Gyre Termes", "default")'
-                  },
-                  mono: {
-                    type: 'string',
-                    default: 'default',
-                    description: 'Monospace font for code (e.g., "DejaVu Sans Mono")'
-                  }
-                },
-                description: 'Font configuration'
-              },
-              draft_mode: {
-                type: 'boolean',
-                default: false,
-                description: 'Enable draft mode (showkeys, no PDF compression)'
-              }
-            },
-            description: 'Compilation options'
-          },
-          latex_preamble: {
-            type: 'string',
-            description: 'Custom LaTeX preamble (\\usepackage{...}, \\newcommand, etc.). Appended to generated preamble.'
-          },
-          output_dir: {
-            type: 'string',
-            description: 'Output directory for PDF and auxiliary files (default: temp directory)'
-          }
-        },
-        required: ['source', 'title']
-      },
-      outputSchema: {
-        type: 'object',
-        properties: {
-          pdf_path: {
-            type: 'string',
-            description: 'Path to generated PDF file'
-          },
-          pdf_base64: {
-            type: 'string',
-            description: 'PDF content as base64 string (for embedding in responses)'
-          },
-          latex_source: {
-            type: 'string',
-            description: 'Generated LaTeX source code'
-          },
-          page_count: {
-            type: 'integer',
-            description: 'Total number of pages in PDF'
-          },
-          metadata: {
-            type: 'object',
-            properties: {
-              title: { type: 'string' },
-              author: { type: 'string' },
-              creation_date: { type: 'string' },
-              file_size: { type: 'integer', description: 'PDF file size in bytes' }
-            },
-            description: 'PDF metadata'
-          },
-          warnings: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                level: { type: 'string', enum: ['warning', 'error'] },
-                message: { type: 'string' },
-                line: { type: 'integer' },
-                context: { type: 'string' }
-              }
-            },
-            description: 'Conversion warnings and errors'
-          },
-          citations: {
-            type: 'object',
-            properties: {
-              total: { type: 'integer' },
-              resolved: { type: 'integer' },
-              unresolved: {
-                type: 'array',
-                items: { type: 'string' },
-                description: 'Citation keys not found in bibliography'
-              }
-            },
-            description: 'Citation statistics'
-          },
-          elapsed_ms: {
-            type: 'number',
-            description: 'Total processing time in milliseconds'
-          }
-        },
-        required: ['pdf_path', 'latex_source', 'warnings', 'elapsed_ms']
-      }
-    },
-    {
-      name: 'validate_latex_math',
-      description: 'Validate mathematical expressions without full document conversion. Useful for checking formulas before committing to PDF generation.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          expressions: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'LaTeX math expressions to validate (e.g., ["$\\sum_{i=1}^{n} x_i$", "$$\\frac{a}{b}$$"])'
-          }
-        },
-        required: ['expressions']
-      },
-      outputSchema: {
-        type: 'object',
-        properties: {
-          results: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                expression: { type: 'string' },
-                valid: { type: 'boolean' },
-                sympy_form: {
-                  type: 'string',
-                  description: 'SymPy interpretation of the expression (if valid)'
-                },
-                error: {
-                  type: 'string',
-                  description: 'Error message (if invalid)'
-                }
-              }
-            }
-          },
-          elapsed_ms: { type: 'number' }
-        }
-      }
-    },
-    {
-      name: 'validate_bibliography',
-      description: 'Validate BibTeX file for syntax errors and resolve citation keys.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          bibtex_content: {
-            type: 'string',
-            description: 'Raw BibTeX file content'
-          }
-        },
-        required: ['bibtex_content']
-      },
-      outputSchema: {
-        type: 'object',
-        properties: {
-          valid: { type: 'boolean' },
-          entries: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                key: { type: 'string' },
-                type: { type: 'string' },
-                fields: { type: 'object' }
-              }
-            },
-            description: 'Parsed BibTeX entries'
-          },
-          errors: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                line: { type: 'integer' },
-                message: { type: 'string' }
-              }
-            }
-          },
-          elapsed_ms: { type: 'number' }
-        }
-      }
-    }
-  ]
-}));
+```typescript
+// servers/latex-mcp/src/index.ts  (actual implementation — uses createZenSciServer + server.tool())
+
+server.tool(
+  'convert_to_pdf',
+  'Convert markdown to publication-ready LaTeX and PDF',
+  {
+    source: z.string().describe('Markdown source content'),
+    title: z.string().optional().describe('Document title'),
+    author: z.array(z.string()).optional().describe('Author list'),
+    bibliography: z.string().optional().describe('BibTeX bibliography content'),
+    bibliography_style: z.string().optional().describe('Citation style (apa, ieee, etc.)'),
+    latex_preamble: z.string().optional().describe('Custom LaTeX preamble'),
+    output_dir: z.string().optional().describe('Output directory path'),
+    options: z.object({
+      engine: z.string().optional().describe('LaTeX engine (pdflatex, xelatex, lualatex)'),
+      toc: z.boolean().optional().describe('Generate table of contents'),
+      geometry: z.string().optional().describe('Page geometry string'),
+      font: z.string().optional().describe('Font family'),
+      draft_mode: z.boolean().optional().describe('Enable draft mode'),
+    }).optional().describe('Conversion options'),
+  },
+  // Result type:
+  // {
+  //   latex_source: string;
+  //   pdf_path?: string;
+  //   page_count?: number;
+  //   warnings: string[];
+  //   elapsed_ms: number;
+  // }
+);
+
+server.tool(
+  'validate_document',
+  'Validate LaTeX math expressions and check a markdown document for conversion readiness',
+  {
+    source: z.string().describe('Markdown source content'),
+    bibliography: z.string().optional().describe('BibTeX bibliography content'),
+  },
+  // Result type:
+  // {
+  //   valid: boolean;
+  //   errors: Array<{ code: string; message: string }>;
+  //   warnings: Array<{ code: string; message: string }>;
+  //   citationStats: { total: number; resolved: number; unresolved: string[] };
+  //   mathStats: { total: number; valid: number; invalid: string[] };
+  //   elapsed_ms: number;
+  // }
+);
+
+server.tool(
+  'check_citations',
+  'Validate BibTeX bibliography content and check citation resolution',
+  {
+    source: z.string().describe('Markdown source content'),
+    bibliography: z.string().describe('BibTeX bibliography content'),
+  },
+  // Result type:
+  // {
+  //   resolved: CitationRecord[];   // { key, entryType, fields }
+  //   unresolved: string[];
+  //   bibliography_entries: number;
+  //   elapsed_ms: number;
+  // }
+);
 ```
+
 
 ### 3.3 Core Integration Points
 

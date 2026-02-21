@@ -107,181 +107,99 @@ User input (markdown + template choice)
 
 ### 3.2 MCP Tool Definitions
 
+> **Implementation note (2026-02-18):** The tool contracts below reflect the **implemented** design. Key divergences from the original spec:
+>
+> 1. **`validate_paper_structure` → `validate_submission`**: Renamed to better express the intent (checking readiness for submission, not just structural presence).
+>
+> 2. **`author: string[]` → `authors: [{name, affiliation?, email?}]`**: Author metadata expanded to a typed object array, enabling per-author affiliation and email—standard in IEEE/ACM formats. The original `author: string[]` is superseded.
+>
+> 3. **`template` enum → `format` enum (`'paper-ieee'|'paper-acm'|'paper-arxiv'`)**: The `format` parameter replaces `template` and uses a namespaced enum (`paper-*` prefix) to distinguish from other format types in the monorepo. The `'nature'`, `'science'`, `'custom'` template options from the original spec are deferred to a future version. `custom_template_path` is removed in v0.1 implementation.
+>
+> The implementations in `servers/paper-mcp/src/tools/` are the canonical contracts.
+
+#### Tool: `convert_to_paper`
+**Description:** Convert markdown to publication-ready LaTeX for IEEE, ACM, or arXiv formats.
+
+**Input Schema:**
 ```typescript
-// servers/paper-mcp/src/index.ts
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [
-    {
-      name: 'convert_to_paper',
-      description: 'Convert markdown research article to venue-specific academic paper PDF using IEEE, ACM, arXiv, or custom LaTeX template.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          source: {
-            type: 'string',
-            description: 'Markdown content. Structure: # Abstract, ## Introduction, ## Methodology, etc. Support figures via ![alt](path).'
-          },
-          title: {
-            type: 'string',
-            description: 'Paper title'
-          },
-          author: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'Author names'
-          },
-          abstract: {
-            type: 'string',
-            description: 'Paper abstract (can be extracted from markdown or provided separately)'
-          },
-          keywords: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'Keywords for venue metadata'
-          },
-          template: {
-            type: 'string',
-            enum: ['ieee', 'acm', 'arxiv', 'nature', 'science', 'custom'],
-            default: 'ieee',
-            description: 'Venue template to use'
-          },
-          custom_template_path: {
-            type: 'string',
-            description: 'Path to custom LaTeX template (required if template="custom")'
-          },
-          bibliography: {
-            type: 'string',
-            description: 'BibTeX content'
-          },
-          options: {
-            type: 'object',
-            properties: {
-              engine: {
-                type: 'string',
-                enum: ['pdflatex', 'xelatex', 'lualatex'],
-                default: 'pdflatex'
-              },
-              max_pages: {
-                type: 'integer',
-                description: 'Maximum page count for venue (e.g., 8 for IEEE conference). Warning if exceeded.'
-              },
-              include_author_notes: {
-                type: 'boolean',
-                default: false,
-                description: 'Include marginpar author notes (for draft mode)'
-              },
-              submission_mode: {
-                type: 'boolean',
-                default: true,
-                description: 'Remove watermarks, finalize fonts, compress PDF for submission'
-              }
-            }
-          },
-          doi: {
-            type: 'string',
-            description: 'DOI for venue (optional, for metadata)'
-          },
-          conference_name: {
-            type: 'string',
-            description: 'Conference/Journal name (e.g., "IEEE Transactions on Software Engineering")'
-          }
-        },
-        required: ['source', 'title', 'author', 'abstract', 'template']
-      },
-      outputSchema: {
-        type: 'object',
-        properties: {
-          pdf_path: { type: 'string' },
-          latex_source: { type: 'string' },
-          page_count: { type: 'integer' },
-          submission_checklist: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                item: { type: 'string' },
-                status: { type: 'string', enum: ['pass', 'warning', 'fail'] },
-                details: { type: 'string' }
-              }
-            },
-            description: 'Pre-submission checklist for venue'
-          },
-          template_info: {
-            type: 'object',
-            properties: {
-              name: { type: 'string' },
-              version: { type: 'string' },
-              margin: { type: 'string' },
-              columns: { type: 'integer' },
-              max_pages: { type: 'integer' },
-              citation_style: { type: 'string' }
-            }
-          },
-          warnings: { type: 'array', items: { type: 'object' } },
-          elapsed_ms: { type: 'number' }
-        }
-      }
-    },
-    {
-      name: 'list_templates',
-      description: 'List available paper templates.',
-      inputSchema: { type: 'object', properties: {} },
-      outputSchema: {
-        type: 'object',
-        properties: {
-          templates: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                id: { type: 'string' },
-                name: { type: 'string' },
-                description: { type: 'string' },
-                venue_type: { type: 'string' },
-                max_pages: { type: 'integer' },
-                citation_style: { type: 'string' },
-                columns: { type: 'integer' }
-              }
-            }
-          }
-        }
-      }
-    },
-    {
-      name: 'validate_paper_structure',
-      description: 'Validate paper structure (abstract, sections, references) without generating PDF.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          source: { type: 'string' },
-          template: { type: 'string' },
-          max_pages: { type: 'integer' }
-        },
-        required: ['source', 'template']
-      },
-      outputSchema: {
-        type: 'object',
-        properties: {
-          valid: { type: 'boolean' },
-          structure: {
-            type: 'object',
-            properties: {
-              has_abstract: { type: 'boolean' },
-              sections: { type: 'array', items: { type: 'string' } },
-              figure_count: { type: 'integer' },
-              table_count: { type: 'integer' },
-              citation_count: { type: 'integer' },
-              word_count: { type: 'integer' },
-              estimated_pages: { type: 'integer' }
-            }
-          },
-          warnings: { type: 'array', items: { type: 'string' } }
-        }
-      }
-    }
-  ]
-}));
+// servers/paper-mcp/src/index.ts (actual Zod registration)
+
+const AuthorSchema = z.object({
+  name: z.string().describe('Author name'),
+  affiliation: z.string().optional().describe('Author affiliation'),
+  email: z.string().optional().describe('Author email'),
+});
+
+server.tool('convert_to_paper', 'Convert markdown to publication-ready LaTeX for IEEE, ACM, or arXiv formats', {
+  source: z.string().describe('Markdown source content'),
+  title: z.string().describe('Paper title'),
+  authors: z.array(AuthorSchema).describe('List of paper authors'),
+  bibliography: z.string().optional().describe('BibTeX bibliography content'),
+  abstract: z.string().optional().describe('Paper abstract'),
+  format: z.enum(['paper-ieee', 'paper-acm', 'paper-arxiv']).describe('Target paper format'),
+  keywords: z.array(z.string()).optional().describe('Paper keywords'),
+});
 ```
+
+**Output Schema (ConvertToPaperResult):**
+```typescript
+{
+  latex_source: string;
+  format: 'paper-ieee' | 'paper-acm' | 'paper-arxiv';
+  section_count: number;
+  citation_count: number;
+  warnings: string[];
+  elapsed_ms: number;
+}
+```
+
+#### Tool: `validate_submission`
+**Description:** Validate a paper for submission readiness (abstract, keywords, structure, math).
+
+**Input Schema:**
+```typescript
+server.tool('validate_submission', 'Validate a paper for submission readiness (abstract, keywords, structure, math)', {
+  source: z.string().describe('Markdown source content'),
+  format: z.enum(['paper-ieee', 'paper-acm', 'paper-arxiv']).describe('Target paper format'),
+  abstract: z.string().optional().describe('Paper abstract'),
+  keywords: z.array(z.string()).optional().describe('Paper keywords'),
+});
+```
+
+**Output Schema (ValidateSubmissionResult):**
+```typescript
+{
+  valid: boolean;
+  errors: Array<{ code: string; message: string }>;
+  warnings: Array<{ code: string; message: string }>;
+  hasAbstract: boolean;
+  hasKeywords: boolean;
+  sectionCount: number;
+  citationCount: number;
+  mathCount: number;
+  elapsed_ms: number;
+}
+```
+
+#### Tool: `list_templates`
+**Description:** List all available academic paper templates with their constraints and citation styles.
+
+**Input Schema:** (no parameters)
+
+**Output Schema:**
+```typescript
+{
+  templates: Array<{
+    id: 'paper-ieee' | 'paper-acm' | 'paper-arxiv';
+    name: string;
+    description: string;
+    citation_style: string;
+    max_pages?: number;
+    columns: number;
+  }>;
+}
+```
+
 
 ### 3.3 Core Integration Points
 

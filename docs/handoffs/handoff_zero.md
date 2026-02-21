@@ -21,9 +21,9 @@ Read these files **in order** before doing any work. Do not skip ahead.
 
 | File | Why |
 |------|-----|
-| `ZenithScience/project_context.md` | **Start here.** Filesystem map, key decisions, vocabulary, tech stack, reading order by agent type. |
-| `ZenithScience/CONTEXT.md` | All 5 formal architecture decisions + open strategic questions. Immutable. |
-| `ZenithScience/STATUS.md` | Live project state — current phase, active workstreams, blockers. |
+| `docs/CONTEXT.md` | **Start here.** Orientation: what ZenSci is, who owns it, where the code lives, filesystem map, reading order by agent type. |
+| `docs/STATUS.md` | Live project state — current phase, active workstreams, blockers, next steps. |
+| `docs/ARCHITECTURE.md` | Canonical architecture decisions, semantic clusters, behavioral vocabulary, spec audit record. |
 
 ### Tier 2 — Must Read (Role-Dependent)
 
@@ -31,19 +31,19 @@ Read these files **in order** before doing any work. Do not skip ahead.
 
 | File | Why |
 |------|-----|
-| `ZenithScience/architecture/2026-02-17_semantic-clusters.md` | The 9 behavioral clusters that define what the system does. The system's behavioral identity. |
-| `ZenithScience/scouts/2026-02-17_module-strategy-scout.md` | Shipping order rationale, 14-module ecosystem, Phase 1–3 breakdown. |
-| `ZenithScience/research/2026-02-17_naming-research.md` | GitHub org / npm scope decisions. Read the ⚠️ DECISION APPLIED section at top. |
-| `ZenithScience/schemas/SCHEMAS.md` | 35+ data contracts backlog with spec status. |
+| `docs/architecture/2026-02-17_semantic-clusters.md` | The 9 behavioral clusters that define what the system does. The system's behavioral identity. |
+| `docs/scouts/2026-02-17_module-strategy-scout.md` | Shipping order rationale, 14-module ecosystem, Phase 1–3 breakdown. |
+| `docs/research/2026-02-17_naming-research.md` | GitHub org / npm scope decisions. Read the ⚠️ DECISION APPLIED section at top. |
+| `docs/schemas/SCHEMAS.md` | 35+ data contracts backlog with spec status. |
 
 **Coding agents → read all of these:**
 
 | File | Why |
 |------|-----|
-| `ZenithScience/specs/infrastructure/packages-core-spec.md` | **Critical.** All shared TypeScript types, `DocumentRequest`/`DocumentResponse`, `MarkdownParser`, `CitationManager`, `MathValidator`, `ConversionPipeline`. Every module depends on this. |
-| `ZenithScience/specs/infrastructure/packages-sdk-spec.md` | **Critical.** `createZenSciServer()` factory → `ZenSciContext`. `PandocWrapper`, `PythonEngine`, `MCPErrorHandler`, `ModuleManifest`. Every server uses this (composition, not inheritance). |
-| `ZenithScience/specs/phase-1/latex-mcp-v0.1-spec.md` | The flagship. First module to implement. Build this only after `packages/core` and `packages/sdk` are complete. |
-| `ZenithScience/zen-sci/README.md` | Inspect the empty scaffold — understand the directory structure before writing code. |
+| `docs/specs/infrastructure/packages-core-spec.md` | **Critical.** All shared TypeScript types, `DocumentRequest`/`DocumentResponse`, `MarkdownParser`, `CitationManager`, `MathValidator`, `ConversionPipeline`. Every module depends on this. |
+| `docs/specs/infrastructure/packages-sdk-spec.md` | **Critical.** `createZenSciServer()` factory → `ZenSciContext`. `PandocWrapper`, `PythonEngine`, `MCPErrorHandler`, `ModuleManifest`. Every server uses this (composition, not inheritance). |
+| `docs/specs/phase-1/latex-mcp-v0.1-spec.md` | The flagship. First module to implement. Build this only after `packages/core` and `packages/sdk` are complete. |
+| `zen-sci/README.md` | Current implementation overview — architecture pattern, directory layout, test counts. |
 
 ### Tier 3 — Reference as Needed
 
@@ -183,11 +183,11 @@ Product:      ZenSci
 Full name:    ZenithScience
 Domain:       ZenithScience.org
 GitHub org:   TresPies-source
-Monorepo:     github.com/TresPies-source/ZenithScience
+Monorepo:     github.com/TresPies-source/zen-sci
 npm scope:    @zen-sci
 IP Owner:     TresPiesDesign.com / Cruz Morales
 License:      Apache 2.0
-Phase:        Specifications Complete / Pre-Code
+Phase:        Phases 0–4 Implemented — Hardening & Pre-Release
 ```
 
 ---

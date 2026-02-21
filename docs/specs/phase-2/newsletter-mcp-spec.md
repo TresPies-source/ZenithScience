@@ -77,135 +77,79 @@ DocumentResponse (format: 'newsletter-html', artifacts: [html, mjml, metadata])
 
 ### 3.2 MCP Tool Definitions
 
-#### Tool: `convert_to_newsletter`
-**Description:** Convert Markdown newsletter to email-safe MJML + HTML.
+> **Implementation note (2026-02-18):** The tool contracts below reflect the **implemented** design, which diverges from the original spec in two places:
+>
+> 1. Tool names changed: `convert_to_newsletter` → `convert_to_email`; `validate_newsletter` → `validate_email`. The new names better match the output artifact (email-safe HTML, not a generic "newsletter" format).
+>
+> 2. The `metadata` sub-object input model (original: `required: ['source', 'metadata']` where metadata contained `subject`, `from_name`, etc.) was flattened into top-level args. This is more ergonomic for MCP callers and consistent with all other servers in the monorepo. Fields `fromName`, `fromEmail`, `replyTo`, `platform` are now direct optional args.
+>
+> The original `convert_to_newsletter` / `validate_newsletter` names and nested metadata model are superseded. The implementation in `servers/newsletter-mcp/src/` is the canonical contract.
+
+#### Tool: `convert_to_email`
+**Description:** Convert Markdown newsletter to email-safe HTML with MJML compilation and CAN-SPAM compliant footer.
 
 **Input Schema:**
-```json
+```typescript
+// servers/newsletter-mcp/src/index.ts (actual Zod registration)
+server.tool('convert_to_email', 'Convert markdown to a responsive, email-safe HTML newsletter with CAN-SPAM compliant footer', {
+  source: z.string().describe('Markdown source content'),
+  subject: z.string().describe('Email subject line'),
+  fromName: z.string().optional().describe('Sender display name'),
+  fromEmail: z.string().optional().describe('Sender email address'),
+  replyTo: z.string().optional().describe('Reply-to email address'),
+  platform: z.enum(['mailchimp', 'substack', 'smtp', 'generic']).optional().describe('Target email platform (default: generic)'),
+  previewText: z.string().optional().describe('Preview text shown in email client list view'),
+  brandColor: z.string().optional().describe('Brand color hex code (default: #1a73e8)'),
+  logoUrl: z.string().optional().describe('URL to the logo image'),
+  footerText: z.string().optional().describe('Custom footer text (default: subscription notice)'),
+  unsubscribeUrl: z.string().optional().describe('Unsubscribe link URL (CAN-SPAM compliance)'),
+});
+```
+
+**Output Schema (ConvertToEmailResult):**
+```typescript
 {
-  "type": "object",
-  "properties": {
-    "source": {
-      "type": "string",
-      "description": "Markdown content (sections separated by ##)"
-    },
-    "metadata": {
-      "type": "object",
-      "properties": {
-        "subject": { "type": "string", "description": "Email subject line" },
-        "preheader": { "type": "string", "description": "Email preview text (< 150 chars)" },
-        "from_name": { "type": "string" },
-        "from_email": { "type": "string" },
-        "reply_to": { "type": "string" },
-        "logo_url": { "type": "string" },
-        "brand_color": { "type": "string", "description": "Hex color code" },
-        "cta_button": {
-          "type": "object",
-          "properties": {
-            "text": { "type": "string" },
-            "url": { "type": "string" }
-          }
-        },
-        "platform": {
-          "type": "string",
-          "enum": ["mailchimp", "substack", "smtp", "generic"],
-          "description": "Target platform for metadata generation"
-        }
-      },
-      "required": ["subject", "from_name", "from_email"]
-    },
-    "options": {
-      "type": "object",
-      "properties": {
-        "include_footer": { "type": "boolean" },
-        "include_unsubscribe": { "type": "boolean" },
-        "image_optimization": { "type": "boolean" },
-        "dark_mode_support": { "type": "boolean" }
-      }
-    }
-  },
-  "required": ["source", "metadata"]
+  html: string;                          // Complete email-safe HTML
+  subject: string;
+  from_name?: string;
+  from_email?: string;
+  reply_to?: string;
+  platform?: string;
+  preview_text?: string;
+  char_count: number;
+  estimated_size_bytes: number;          // Gmail clips at 102400 bytes
+  mjml_errors: Array<{ message: string }>;
+  warnings: string[];                    // e.g. Gmail clip threshold exceeded
+  elapsed_ms: number;
 }
 ```
 
-**Output Schema:**
-```json
-{
-  "type": "object",
-  "properties": {
-    "id": { "type": "string" },
-    "format": { "type": "string" },
-    "content": {
-      "type": "string",
-      "description": "Base64-encoded HTML email; includes MJML source as artifact"
-    },
-    "artifacts": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "type": { "type": "string", "enum": ["html", "mjml", "metadata", "validation_report"] },
-          "filename": { "type": "string" },
-          "content": { "type": "string" }
-        }
-      }
-    },
-    "metadata": {
-      "type": "object",
-      "properties": {
-        "subject": { "type": "string" },
-        "preheader": { "type": "string" },
-        "section_count": { "type": "integer" },
-        "link_count": { "type": "integer" },
-        "image_count": { "type": "integer" },
-        "email_safe": { "type": "boolean" },
-        "file_size_bytes": { "type": "integer" }
-      }
-    },
-    "elapsed": { "type": "number" }
-  }
-}
-```
-
-#### Tool: `validate_newsletter`
-**Description:** Validate newsletter structure and email compatibility.
+#### Tool: `validate_email`
+**Description:** Validate a markdown newsletter for email structure, accessibility, and size constraints.
 
 **Input Schema:**
-```json
+```typescript
+server.tool('validate_email', 'Validate a markdown newsletter for email structure, accessibility, and size constraints', {
+  source: z.string().describe('Markdown source content'),
+  subject: z.string().optional().describe('Email subject line (used if missing from frontmatter)'),
+});
+```
+
+**Output Schema (ValidateEmailResult):**
+```typescript
 {
-  "type": "object",
-  "properties": {
-    "source": { "type": "string" },
-    "metadata": { "type": "object" },
-    "strict_mode": { "type": "boolean" }
-  },
-  "required": ["source", "metadata"]
+  valid: boolean;
+  errors: Array<{ code: string; message: string }>;
+  warnings: Array<{ code: string; message: string }>;
+  wordCount: number;
+  headingCount: number;
+  linkCount: number;
+  hasUnsubscribeLink: boolean;
+  hasSubjectLine: boolean;
+  elapsed_ms: number;
 }
 ```
 
-**Output Schema:**
-```json
-{
-  "type": "object",
-  "properties": {
-    "valid": { "type": "boolean" },
-    "errors": { "type": "array", "items": { "type": "object" } },
-    "warnings": { "type": "array" },
-    "report": {
-      "type": "object",
-      "properties": {
-        "section_count": { "type": "integer" },
-        "link_count": { "type": "integer" },
-        "image_count": { "type": "integer" },
-        "html_safe": { "type": "boolean" },
-        "subject_length": { "type": "integer" },
-        "preheader_length": { "type": "integer" },
-        "estimated_display_width": { "type": "string" }
-      }
-    }
-  }
-}
-```
 
 ### 3.3 Core Integration Points
 

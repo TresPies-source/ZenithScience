@@ -122,245 +122,116 @@ User input (markdown + .bib)
 
 ### 3.2 MCP Tool Definitions
 
-```typescript
-// servers/blog-mcp/src/index.ts
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+> **Implementation note (2026-02-18):** The tool contracts below reflect the **implemented** design. Key divergences from the original spec:
+>
+> 1. **`convert_to_html` — `author` is a scalar string, not an array**: The implemented `author?: string` (singular) overrides frontmatter. The original spec had `author: string[]` (array). Single-author override is sufficient for blog posts; multi-author handling lives in frontmatter.
+>
+> 2. **`convert_to_html` — simplified options**: The original options block included `toc_position`, `math_engine`, `syntax_highlight`, `responsive`, `dark_mode_support`, `custom_css`, `include_schema`, `base_url`, `featured_image`, `summary`, `tags`, `bibliography_style`. The implementation uses a leaner options object: `toc`, `theme`, `selfContained`, `seoSiteUrl`, `seoSiteName`, `twitterHandle`.
+>
+> 3. **`generate_feed` — posts use `url` not `file_path`**: The original spec required `file_path` (path to `.md` file on disk). The implementation uses `url` (the published URL of the post), which is more appropriate for an MCP tool that generates feed XML from metadata — file I/O is the caller's concern. `author` in a post is `string` (not `string[]`).
+>
+> 4. **New `validate_post` tool**: Not in the original spec. Added to validate markdown post structure, math, citations, and accessibility before conversion.
+>
+> The implementations in `servers/blog-mcp/src/tools/` are the canonical contracts.
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [
-    {
-      name: 'convert_to_html',
-      description: 'Convert markdown blog post to semantic HTML with syntax highlighting, KaTeX math rendering, and SEO metadata.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          source: {
-            type: 'string',
-            description: 'Markdown content to convert'
-          },
-          title: {
-            type: 'string',
-            description: 'Blog post title (required for SEO)'
-          },
-          author: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'Author names'
-          },
-          slug: {
-            type: 'string',
-            description: 'URL slug for the post (e.g., "my-research-findings"). Auto-generated from title if omitted.'
-          },
-          date: {
-            type: 'string',
-            format: 'date',
-            description: 'Publication date (YYYY-MM-DD). Auto-set to today if omitted.'
-          },
-          summary: {
-            type: 'string',
-            description: 'Short summary for feed and Open Graph (< 160 chars)'
-          },
-          tags: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'Post tags for categorization and feed filtering'
-          },
-          bibliography: {
-            type: 'string',
-            description: 'BibTeX content'
-          },
-          bibliography_style: {
-            type: 'string',
-            enum: ['ieee', 'acm', 'chicago', 'apa', 'nature'],
-            default: 'ieee',
-            description: 'Citation style'
-          },
-          featured_image: {
-            type: 'string',
-            description: 'URL to featured image for social sharing (Open Graph)'
-          },
-          options: {
-            type: 'object',
-            properties: {
-              toc: {
-                type: 'boolean',
-                default: true,
-                description: 'Include sticky table of contents'
-              },
-              toc_position: {
-                type: 'string',
-                enum: ['sticky', 'inline', 'none'],
-                default: 'sticky',
-                description: 'Table of contents display mode'
-              },
-              math_engine: {
-                type: 'string',
-                enum: ['katex', 'mathjax'],
-                default: 'katex',
-                description: 'Math rendering engine'
-              },
-              syntax_highlight: {
-                type: 'boolean',
-                default: true,
-                description: 'Enable code syntax highlighting'
-              },
-              responsive: {
-                type: 'boolean',
-                default: true,
-                description: 'Generate responsive CSS (mobile-first)'
-              },
-              dark_mode_support: {
-                type: 'boolean',
-                default: true,
-                description: 'Include dark mode via prefers-color-scheme'
-              },
-              custom_css: {
-                type: 'string',
-                description: 'Custom CSS to append to generated styles'
-              },
-              include_schema: {
-                type: 'boolean',
-                default: true,
-                description: 'Include JSON-LD schema for search engines'
-              }
-            },
-            description: 'Rendering options'
-          },
-          base_url: {
-            type: 'string',
-            description: 'Base URL for canonical link and RSS feed (e.g., "https://blog.example.com")'
-          }
-        },
-        required: ['source', 'title']
-      },
-      outputSchema: {
-        type: 'object',
-        properties: {
-          html: {
-            type: 'string',
-            description: 'Complete HTML document (or fragment if embed_only)'
-          },
-          excerpt: {
-            type: 'string',
-            description: 'First paragraph as excerpt for feed'
-          },
-          metadata: {
-            type: 'object',
-            properties: {
-              title: { type: 'string' },
-              author: { type: 'string' },
-              slug: { type: 'string' },
-              date: { type: 'string' },
-              summary: { type: 'string' },
-              tags: { type: 'array', items: { type: 'string' } },
-              word_count: { type: 'integer' },
-              read_time_minutes: { type: 'integer' },
-              featured_image: { type: 'string' }
-            },
-            description: 'Post metadata extracted or inferred'
-          },
-          seo: {
-            type: 'object',
-            properties: {
-              og_title: { type: 'string' },
-              og_description: { type: 'string' },
-              og_image: { type: 'string' },
-              twitter_card: { type: 'string' },
-              canonical_url: { type: 'string' }
-            },
-            description: 'SEO metadata for social sharing'
-          },
-          citations: {
-            type: 'object',
-            properties: {
-              total: { type: 'integer' },
-              resolved: { type: 'integer' },
-              unresolved: { type: 'array', items: { type: 'string' } }
-            }
-          },
-          warnings: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                level: { type: 'string', enum: ['warning', 'error'] },
-                message: { type: 'string' },
-                line: { type: 'integer' }
-              }
-            }
-          },
-          elapsed_ms: { type: 'number' }
-        },
-        required: ['html', 'metadata', 'warnings', 'elapsed_ms']
-      }
-    },
-    {
-      name: 'generate_feed',
-      description: 'Generate RSS 2.0 or Atom 1.0 feed from multiple blog posts.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          posts: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                file_path: { type: 'string', description: 'Path to .md file' },
-                slug: { type: 'string' },
-                date: { type: 'string', format: 'date' },
-                title: { type: 'string' },
-                summary: { type: 'string' },
-                author: { type: 'array', items: { type: 'string' } },
-                tags: { type: 'array', items: { type: 'string' } }
-              },
-              required: ['file_path', 'slug', 'title']
-            },
-            description: 'List of posts to include in feed'
-          },
-          feed_title: {
-            type: 'string',
-            description: 'Feed title (blog name)'
-          },
-          feed_description: {
-            type: 'string',
-            description: 'Feed description'
-          },
-          base_url: {
-            type: 'string',
-            description: 'Base URL (e.g., "https://blog.example.com")'
-          },
-          format: {
-            type: 'string',
-            enum: ['rss', 'atom'],
-            default: 'atom',
-            description: 'Feed format'
-          },
-          limit: {
-            type: 'integer',
-            default: 20,
-            description: 'Max posts in feed'
-          }
-        },
-        required: ['posts', 'feed_title', 'base_url']
-      },
-      outputSchema: {
-        type: 'object',
-        properties: {
-          feed: {
-            type: 'string',
-            description: 'RSS/Atom feed XML content'
-          },
-          format: { type: 'string' },
-          posts_included: { type: 'integer' },
-          elapsed_ms: { type: 'number' }
-        }
-      }
-    }
-  ]
-}));
+#### Tool: `convert_to_html`
+**Description:** Convert markdown to a responsive HTML blog post with SEO metadata.
+
+**Input Schema:**
+```typescript
+// servers/blog-mcp/src/index.ts (actual Zod registration)
+server.tool('convert_to_html', 'Convert markdown to a responsive HTML blog post with SEO metadata', {
+  source: z.string().describe('Markdown source content'),
+  title: z.string().optional().describe('Blog post title (overrides frontmatter)'),
+  author: z.string().optional().describe('Blog post author (overrides frontmatter)'),
+  bibliography: z.string().optional().describe('BibTeX bibliography content'),
+  options: z.object({
+    toc: z.boolean().optional().describe('Generate table of contents'),
+    theme: z.enum(['light', 'dark', 'system']).optional().describe('CSS theme'),
+    selfContained: z.boolean().optional().describe('Produce a self-contained HTML file'),
+    seoSiteUrl: z.string().optional().describe('Site URL for SEO metadata'),
+    seoSiteName: z.string().optional().describe('Site name for SEO metadata'),
+    twitterHandle: z.string().optional().describe('Twitter handle for card metadata'),
+  }).optional().describe('Conversion options'),
+});
 ```
+
+**Output Schema (ConvertToHtmlResult):**
+```typescript
+{
+  html: string;
+  title: string;
+  author?: string;
+  slug: string;
+  description?: string;
+  wordCount: number;
+  readingTimeMinutes: number;
+  warnings: string[];
+  elapsed_ms: number;
+}
+```
+
+#### Tool: `generate_feed`
+**Description:** Generate an Atom 1.0 RSS feed from a list of blog post metadata.
+
+**Input Schema:**
+```typescript
+const PostMetadataSchema = z.object({
+  title: z.string().describe('Post title'),
+  url: z.string().describe('Post URL'),                 // NOTE: 'url' not 'file_path'
+  date: z.string().describe('Publication date (ISO 8601)'),
+  author: z.string().optional().describe('Post author'),  // scalar, not array
+  summary: z.string().optional().describe('Post summary'),
+  content: z.string().optional().describe('Post HTML content'),
+  tags: z.array(z.string()).optional().describe('Post tags'),
+});
+
+server.tool('generate_feed', 'Generate an Atom 1.0 RSS feed from a list of blog post metadata', {
+  posts: z.array(PostMetadataSchema).describe('List of post metadata'),
+  feedTitle: z.string().describe('Feed title'),
+  feedUrl: z.string().describe('Feed URL (self link)'),
+  siteUrl: z.string().describe('Site URL'),
+  description: z.string().optional().describe('Feed description'),
+});
+```
+
+**Output Schema (GenerateFeedResult):**
+```typescript
+{
+  feed: string;        // Atom XML content
+  postCount: number;
+  elapsed_ms: number;
+}
+```
+
+#### Tool: `validate_post`
+**Description:** Validate a markdown blog post for structure, accessibility, math, and citations.
+
+> **Implementation note:** `validate_post` was not in the original spec. It was added during implementation as the standard validation tool pattern used across all MCP servers.
+
+**Input Schema:**
+```typescript
+server.tool('validate_post', 'Validate a markdown blog post for structure, accessibility, math, and citations', {
+  source: z.string().describe('Markdown source content'),
+  bibliography: z.string().optional().describe('BibTeX bibliography content'),
+});
+```
+
+**Output Schema (ValidatePostResult):**
+```typescript
+{
+  valid: boolean;
+  errors: Array<{ code: string; message: string }>;
+  warnings: Array<{ code: string; message: string }>;
+  wordCount: number;
+  headingCount: number;
+  hasTitle: boolean;
+  mathCount: number;
+  citationCount: number;
+  elapsed_ms: number;
+}
+```
+
 
 ### 3.3 Core Integration Points
 
