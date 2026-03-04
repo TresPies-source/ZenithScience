@@ -15,6 +15,9 @@
 ```bash
 cd ~/ZenflowProjects/AgenticGatewayByDojoGenesis
 
+# Clear port 8080 if a previous gateway is still running
+kill $(lsof -ti:8080) 2>/dev/null; sleep 1
+
 # Build fresh binary
 make build
 
@@ -74,7 +77,7 @@ cp ~/ZenflowProjects/AgenticGatewayByDojoGenesis/bin/agentic-gateway \
    src-tauri/binaries/agentic-gateway-aarch64-apple-darwin
 
 # Build and run the full desktop app
-cargo tauri dev
+npm run tauri-dev
 ```
 
 **Watch for:**
